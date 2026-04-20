@@ -30,15 +30,31 @@ class IpLocationService {
             ),
           );
 
+  // release 也要出日志
+  static void _log(String msg) {
+    // ignore: avoid_print
+    print('[IpLocationService] $msg');
+  }
+
   // 顺序尝试多个 IP 提供商，每个结果再用系统时区做合理性校验
   // 返回的位置一定是跟设备时区自洽的（能避开 VPN/ISP 跨境路由把中国用户误定位到东京那种坑）
   Future<IpLocation?> locate() async {
+    _log('开始 IP 定位');
     final r1 = await _tryIpapiCo();
-    if (r1 != null && _matchesDeviceTimezone(r1)) return r1;
+    if (r1 != null && _matchesDeviceTimezone(r1)) {
+      _log('ipapi.co 通过时区校验，使用');
+      return r1;
+    }
+    if (r1 != null) _log('ipapi.co 结果 cc=${r1.countryCode} 与设备时区冲突，丢弃');
 
     final r2 = await _tryIpwhoIs();
-    if (r2 != null && _matchesDeviceTimezone(r2)) return r2;
+    if (r2 != null && _matchesDeviceTimezone(r2)) {
+      _log('ipwho.is 通过时区校验，使用');
+      return r2;
+    }
+    if (r2 != null) _log('ipwho.is 结果 cc=${r2.countryCode} 与设备时区冲突，丢弃');
 
+    _log('IP 定位全部失败/被拒');
     return null;
   }
 
@@ -64,45 +80,75 @@ class IpLocationService {
   }
 
   Future<IpLocation?> _tryIpapiCo() async {
+    final sw = Stopwatch()..start();
     try {
       final resp = await _dio.get<Map<String, dynamic>>('https://ipapi.co/json/');
       final data = resp.data;
-      if (data == null) return null;
-      if (data['error'] == true) return null;
+      if (data == null) {
+        _log('ipapi.co 空响应 ${sw.elapsedMilliseconds}ms');
+        return null;
+      }
+      if (data['error'] == true) {
+        _log('ipapi.co error=${data['reason']} ${sw.elapsedMilliseconds}ms');
+        return null;
+      }
       final lat = data['latitude'];
       final lon = data['longitude'];
-      if (lat is! num || lon is! num) return null;
-      if (lat == 0 && lon == 0) return null;
+      if (lat is! num || lon is! num) {
+        _log('ipapi.co 缺坐标 ${sw.elapsedMilliseconds}ms');
+        return null;
+      }
+      if (lat == 0 && lon == 0) {
+        _log('ipapi.co 坐标 (0,0) 丢弃');
+        return null;
+      }
 
       final city = (data['city'] as String?)?.trim();
       final region = (data['region'] as String?)?.trim();
       final country = (data['country_name'] as String?)?.trim();
       final cc = (data['country'] as String?)?.trim(); // ipapi.co 的 country 就是 ISO2
       final name = _firstNonEmpty([city, region, country]) ?? '当前位置';
+      _log('ipapi.co -> $name cc=$cc ($lat,$lon) ${sw.elapsedMilliseconds}ms');
       return IpLocation(latitude: lat.toDouble(), longitude: lon.toDouble(), cityName: name, countryCode: cc);
-    } catch (_) {
+    } catch (e) {
+      _log('ipapi.co 异常 ${sw.elapsedMilliseconds}ms: $e');
       return null;
     }
   }
 
   Future<IpLocation?> _tryIpwhoIs() async {
+    final sw = Stopwatch()..start();
     try {
       final resp = await _dio.get<Map<String, dynamic>>('https://ipwho.is/');
       final data = resp.data;
-      if (data == null) return null;
-      if (data['success'] == false) return null;
+      if (data == null) {
+        _log('ipwho.is 空响应 ${sw.elapsedMilliseconds}ms');
+        return null;
+      }
+      if (data['success'] == false) {
+        _log('ipwho.is success=false msg=${data['message']} ${sw.elapsedMilliseconds}ms');
+        return null;
+      }
       final lat = data['latitude'];
       final lon = data['longitude'];
-      if (lat is! num || lon is! num) return null;
-      if (lat == 0 && lon == 0) return null;
+      if (lat is! num || lon is! num) {
+        _log('ipwho.is 缺坐标 ${sw.elapsedMilliseconds}ms');
+        return null;
+      }
+      if (lat == 0 && lon == 0) {
+        _log('ipwho.is 坐标 (0,0) 丢弃');
+        return null;
+      }
 
       final city = (data['city'] as String?)?.trim();
       final region = (data['region'] as String?)?.trim();
       final country = (data['country'] as String?)?.trim();
       final cc = (data['country_code'] as String?)?.trim(); // ipwho.is 用 country_code
       final name = _firstNonEmpty([city, region, country]) ?? '当前位置';
+      _log('ipwho.is -> $name cc=$cc ($lat,$lon) ${sw.elapsedMilliseconds}ms');
       return IpLocation(latitude: lat.toDouble(), longitude: lon.toDouble(), cityName: name, countryCode: cc);
-    } catch (_) {
+    } catch (e) {
+      _log('ipwho.is 异常 ${sw.elapsedMilliseconds}ms: $e');
       return null;
     }
   }

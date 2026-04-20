@@ -74,6 +74,7 @@ Future<TargetLocation> _resolveInitialFast(Ref ref) async {
 
   // 每一层都过坐标合理性闸门：挡住旧 mock location、跨境 IP 误判、系统残留
   // 脏数据（经典 bug：中国用户启动冷启看到东京）。不合理就继续往下走。
+  _log('冷启动位置解析开始');
 
   // 1. 上次用过的城市
   final cachedCity = await cache.loadLastCity();
@@ -81,35 +82,51 @@ Future<TargetLocation> _resolveInitialFast(Ref ref) async {
     final lat = (cachedCity['latitude'] as num?)?.toDouble();
     final lon = (cachedCity['longitude'] as num?)?.toDouble();
     if (lat != null && lon != null && plausibleForDeviceTimezone(lat, lon)) {
+      _log('命中 [1] 上次城市: ${cachedCity['name']} ($lat, $lon)');
       return TargetLocation(
         name: cachedCity['name'] as String? ?? '当前位置',
         latitude: lat,
         longitude: lon,
       );
     }
+    _log('[1] 上次城市存在但坐标不合理，跳过');
   }
 
   // 2. 24h 内缓存的原始位置
   final cachedPos = await cache.loadPosition();
   if (cachedPos != null && plausibleForDeviceTimezone(cachedPos.latitude, cachedPos.longitude)) {
+    _log('命中 [2] 缓存位置 (${cachedPos.latitude}, ${cachedPos.longitude})');
     return TargetLocation(name: '当前位置', latitude: cachedPos.latitude, longitude: cachedPos.longitude);
   }
+  if (cachedPos != null) _log('[2] 缓存位置不合理，跳过');
 
   // 3. 系统 lastKnown
   final last = await locSvc.getLastKnown();
   if (last != null && plausibleForDeviceTimezone(last.latitude, last.longitude)) {
     await cache.savePosition(last.latitude, last.longitude);
+    _log('命中 [3] 系统 lastKnown (${last.latitude}, ${last.longitude})');
     return TargetLocation(name: '当前位置', latitude: last.latitude, longitude: last.longitude);
   }
+  if (last != null) _log('[3] lastKnown 不合理，跳过');
 
   // 4. IP 定位 —— 粗略但秒级返回，比等 GPS 强太多
   final ip = await ref.read(ipLocationServiceProvider).locate();
   if (ip != null && plausibleForDeviceTimezone(ip.latitude, ip.longitude)) {
+    _log('命中 [4] IP 定位: ${ip.cityName} (${ip.latitude}, ${ip.longitude})');
     return TargetLocation(name: ip.cityName, latitude: ip.latitude, longitude: ip.longitude);
   }
+  if (ip != null) _log('[4] IP 定位不合理，跳过');
 
   // 5. 默认北京
-  return _fallbackByTimezone();
+  final fb = _fallbackByTimezone();
+  _log('[5] 全部失败，兜底 ${fb.name} (${fb.latitude}, ${fb.longitude})');
+  return fb;
+}
+
+// release 也要出日志
+void _log(String msg) {
+  // ignore: avoid_print
+  print('[Providers] $msg');
 }
 
 // 后台 GPS 精确化：fire-and-forget，成功就更新 targetLocation
