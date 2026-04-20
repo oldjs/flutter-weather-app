@@ -58,15 +58,35 @@ class WeatherApi {
     }
   }
 
-  // 城市搜索
+  // 城市搜索：
+  // - 输入含中文：language=zh，多拿一些结果，然后过滤出 country_code='CN'
+  //   这样"上海""杭州"直接命中中国城市，不会混进海外同名地点
+  // - 纯英文输入：全球搜索，language=en
   Future<List<dynamic>> searchCity(String query) async {
-    if (query.trim().isEmpty) return [];
+    final q = query.trim();
+    if (q.isEmpty) return [];
+
+    final hasChinese = RegExp(r'[\u4e00-\u9fa5]').hasMatch(q);
     final resp = await _dio.get(
       'https://geocoding-api.open-meteo.com/v1/search',
-      queryParameters: {'name': query, 'count': 8, 'language': 'zh', 'format': 'json'},
+      queryParameters: {
+        'name': q,
+        // 中文多拿几条，方便过滤后还剩足够结果
+        'count': hasChinese ? 20 : 10,
+        'language': hasChinese ? 'zh' : 'en',
+        'format': 'json',
+      },
     );
     final data = resp.data as Map<String, dynamic>;
-    return (data['results'] as List?) ?? [];
-  }
+    final all = (data['results'] as List?) ?? [];
 
+    if (!hasChinese) return all;
+
+    // 中文输入优先展示中国结果；完全没中国结果才回退全部（例如搜"京都""东京"）
+    final cn = all.where((e) {
+      final m = e as Map<String, dynamic>;
+      return m['country_code'] == 'CN';
+    }).toList();
+    return cn.isNotEmpty ? cn : all;
+  }
 }

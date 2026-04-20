@@ -218,19 +218,37 @@ class _Header extends StatelessWidget {
                       Icon(Icons.search_rounded, color: Colors.white.withValues(alpha: 0.6), size: 18),
                       const SizedBox(width: 10),
                       // CupertinoTextField 没有 MD 下划线/浮动标签
+                      // 关键：autocorrect/enableSuggestions/spellCheck 都要关掉，
+                      // 否则部分 Android 输入法会给识别不了的词加红/黄下划线
                       Expanded(
                         child: CupertinoTextField(
                           controller: controller,
                           focusNode: focus,
                           onChanged: onChanged,
-                          style: const TextStyle(color: Colors.white, fontSize: 15),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            decoration: TextDecoration.none,
+                            decorationColor: Colors.transparent,
+                            decorationThickness: 0,
+                          ),
                           placeholder: '搜索城市',
-                          placeholderStyle: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 15),
+                          placeholderStyle: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.45),
+                            fontSize: 15,
+                            decoration: TextDecoration.none,
+                          ),
                           // 显式去掉所有 Cupertino 外框，完全由父容器画
                           decoration: const BoxDecoration(),
                           cursorColor: Colors.white,
                           cursorWidth: 1.5,
                           padding: const EdgeInsets.symmetric(vertical: 10),
+                          // 关掉各种可能导致下划线/波浪线的装饰
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
+                          keyboardType: TextInputType.text,
+                          textInputAction: TextInputAction.search,
                         ),
                       ),
                       // 有输入时显示清除按钮

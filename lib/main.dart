@@ -36,6 +36,17 @@ class WeatherApp extends StatelessWidget {
       title: 'Weather',
       debugShowCheckedModeBanner: false,
       theme: _buildBareTheme(),
+      // 全局兜底：所有 Text 默认无装饰，避免某些输入法/系统字体在父层漏下的黄色波浪线
+      builder: (context, child) {
+        return DefaultTextStyle.merge(
+          style: const TextStyle(
+            decoration: TextDecoration.none,
+            decorationColor: Colors.transparent,
+            decorationThickness: 0,
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const HomeScreen(),
     );
   }

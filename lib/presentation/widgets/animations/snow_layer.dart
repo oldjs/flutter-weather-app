@@ -3,14 +3,28 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 // 雪花粒子
+// depth: 0..1，近大近亮近快，摆动幅度也更大
 class _Flake {
   double x;
   double y;
-  double r; // 半径
-  double speedY;
-  double speedX;
-  double wobbleSeed; // 摆动相位
-  _Flake(this.x, this.y, this.r, this.speedY, this.speedX, this.wobbleSeed);
+  final double depth;
+  final double radius;
+  final double speedY;
+  final double wobbleAmp; // 左右摆动幅度
+  final double wobbleFreq; // 摆动频率
+  final double wobblePhase; // 初相位
+  final double alpha;
+  _Flake({
+    required this.x,
+    required this.y,
+    required this.depth,
+    required this.radius,
+    required this.speedY,
+    required this.wobbleAmp,
+    required this.wobbleFreq,
+    required this.wobblePhase,
+    required this.alpha,
+  });
 }
 
 class SnowLayer extends StatefulWidget {
@@ -25,33 +39,40 @@ class _SnowLayerState extends State<SnowLayer> with SingleTickerProviderStateMix
   final _rng = Random();
   final List<_Flake> _flakes = [];
   Size _size = Size.zero;
-  double _t = 0;
+  double _time = 0;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 20))..repeat();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 30))..repeat();
   }
 
   void _ensureFlakes(Size size) {
     if (size == _size && _flakes.isNotEmpty) return;
     _size = size;
     _flakes.clear();
-    final count = (size.width * size.height / 12000).round();
+    // 比雨少很多，雪花轻盈但密度适中
+    final count = (size.width * size.height / 7000).round().clamp(40, 120);
     for (var i = 0; i < count; i++) {
       _flakes.add(_newFlake(size, fresh: false));
     }
   }
 
   _Flake _newFlake(Size size, {required bool fresh}) {
-    final r = 1.5 + _rng.nextDouble() * 3.5;
+    final depth = pow(_rng.nextDouble(), 1.2).toDouble();
+    final r = 1.0 + depth * 3.8;
     return _Flake(
-      _rng.nextDouble() * size.width,
-      fresh ? -r * 2 : _rng.nextDouble() * size.height,
-      r,
-      0.5 + _rng.nextDouble() * 1.5, // 雪花比雨慢很多
-      (_rng.nextDouble() - 0.5) * 0.6,
-      _rng.nextDouble() * pi * 2,
+      x: _rng.nextDouble() * size.width,
+      y: fresh ? -r * 3 : _rng.nextDouble() * size.height,
+      depth: depth,
+      radius: r,
+      // 近的快，远的慢；整体比雨慢得多
+      speedY: 0.4 + depth * 2.2,
+      // 近处摆动大一些
+      wobbleAmp: 6 + depth * 22,
+      wobbleFreq: 0.3 + _rng.nextDouble() * 0.9,
+      wobblePhase: _rng.nextDouble() * pi * 2,
+      alpha: 0.35 + depth * 0.55,
     );
   }
 
@@ -70,17 +91,15 @@ class _SnowLayerState extends State<SnowLayer> with SingleTickerProviderStateMix
         return AnimatedBuilder(
           animation: _ctrl,
           builder: (_, __) {
-            _t += 0.05;
+            _time += 0.035;
             for (var i = 0; i < _flakes.length; i++) {
               final f = _flakes[i];
               f.y += f.speedY;
-              // 加点水平摆动，显得轻盈
-              f.x += f.speedX + sin(_t + f.wobbleSeed) * 0.4;
-              if (f.y > size.height + 5 || f.x < -10 || f.x > size.width + 10) {
+              if (f.y > size.height + f.radius * 2) {
                 _flakes[i] = _newFlake(size, fresh: true);
               }
             }
-            return CustomPaint(size: size, painter: _SnowPainter(_flakes));
+            return CustomPaint(size: size, painter: _SnowPainter(_flakes, _time));
           },
         );
       },
@@ -90,14 +109,23 @@ class _SnowLayerState extends State<SnowLayer> with SingleTickerProviderStateMix
 
 class _SnowPainter extends CustomPainter {
   final List<_Flake> flakes;
-  _SnowPainter(this.flakes);
+  final double time;
+  _SnowPainter(this.flakes, this.time);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint();
+    final paint = Paint()..style = PaintingStyle.fill;
     for (final f in flakes) {
-      paint.color = Colors.white.withValues(alpha: 0.8);
-      canvas.drawCircle(Offset(f.x, f.y), f.r, paint);
+      // sin 波给雪花横向摆动，x 不修改原始值，保持飘浮的"无规律"感
+      final sway = sin(time * f.wobbleFreq + f.wobblePhase) * f.wobbleAmp;
+      final cx = f.x + sway;
+      // 近处雪花加一圈柔光晕，强化景深
+      if (f.depth > 0.6) {
+        paint.color = Colors.white.withValues(alpha: f.alpha * 0.25);
+        canvas.drawCircle(Offset(cx, f.y), f.radius * 2.4, paint);
+      }
+      paint.color = Colors.white.withValues(alpha: f.alpha);
+      canvas.drawCircle(Offset(cx, f.y), f.radius, paint);
     }
   }
 
