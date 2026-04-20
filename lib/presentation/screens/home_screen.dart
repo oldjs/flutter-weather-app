@@ -8,6 +8,10 @@ import '../../domain/entities/weather.dart';
 import '../providers/providers.dart';
 import '../widgets/animated_background.dart';
 import '../widgets/aqi_card.dart';
+import '../widgets/common/pill_button.dart';
+import '../widgets/common/pull_refresh.dart';
+import '../widgets/common/spinner.dart';
+import '../widgets/common/toast.dart';
 import '../widgets/current_weather_card.dart';
 import '../widgets/daily_forecast.dart';
 import '../widgets/detail_grid.dart';
@@ -16,17 +20,17 @@ import '../widgets/life_index.dart';
 import '../widgets/sun_arc.dart';
 import 'search_screen.dart';
 
-// 主页
+// 主页：无 Scaffold、无 AppBar，整屏自绘
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final weatherAsync = ref.watch(weatherProvider);
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      body: weatherAsync.when(
+    // 整个页面用 ColoredBox + Stack 承载，不用 Scaffold
+    return ColoredBox(
+      color: Colors.black,
+      child: weatherAsync.when(
         data: (w) => _Loaded(bundle: w),
         loading: () => const _Loading(),
         error: (e, _) => _ErrorView(error: e, onRetry: () => ref.invalidate(weatherProvider)),
@@ -35,7 +39,7 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-// 加载中
+// 加载中：渐变底 + 自定义 Spinner
 class _Loading extends StatelessWidget {
   const _Loading();
 
@@ -53,9 +57,12 @@ class _Loading extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(color: Colors.white70),
+            Spinner(size: 32, strokeWidth: 2.5, color: Colors.white),
             SizedBox(height: 16),
-            Text('正在获取天气…', style: TextStyle(color: Colors.white70)),
+            Text(
+              '正在获取天气…',
+              style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 0.3),
+            ),
           ],
         ),
       ),
@@ -63,7 +70,7 @@ class _Loading extends StatelessWidget {
   }
 }
 
-// 错误提示
+// 错误提示：无 Scaffold，居中图标+文字+自定义按钮
 class _ErrorView extends StatelessWidget {
   final Object error;
   final VoidCallback onRetry;
@@ -79,27 +86,29 @@ class _ErrorView extends StatelessWidget {
           colors: [Color(0xFF2B2B3A), Color(0xFF4A4A6A)],
         ),
       ),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off, color: Colors.white70, size: 56),
-              const SizedBox(height: 16),
-              Text(
-                '获取天气失败',
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '$error',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 24),
-              FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
-            ],
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_off, color: Colors.white.withValues(alpha: 0.7), size: 56),
+                const SizedBox(height: 20),
+                const Text(
+                  '获取天气失败',
+                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+                ),
+                const SizedBox(height: 28),
+                FlatPillButton(label: '重试', onTap: onRetry),
+              ],
+            ),
           ),
         ),
       ),
@@ -107,7 +116,7 @@ class _ErrorView extends StatelessWidget {
   }
 }
 
-// 数据加载完成后的页面
+// 数据加载完成：全屏沉浸 + 毛玻璃卡片滚动
 class _Loaded extends ConsumerWidget {
   final WeatherBundle bundle;
   const _Loaded({required this.bundle});
@@ -117,71 +126,84 @@ class _Loaded extends ConsumerWidget {
     final kind = WeatherCodes.kindOf(bundle.current.weatherCode);
     final theme = WeatherTheme.of(kind, isDay: bundle.current.isDay);
 
-    // 沉浸式：状态栏透明、图标跟着背景亮度走
-    SystemChrome.setSystemUIOverlayStyle(
-      SystemUiOverlayStyle(
+    // 沉浸式系统栏：状态栏透明 + 图标配色跟随背景亮暗
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: theme.brightness == Brightness.dark ? Brightness.light : Brightness.dark,
-        systemNavigationBarColor: theme.gradient.last,
+        statusBarBrightness: theme.brightness,
+        systemNavigationBarColor: Colors.transparent,
         systemNavigationBarIconBrightness: theme.brightness == Brightness.dark ? Brightness.light : Brightness.dark,
       ),
-    );
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // 底层：渐变 + 天气动效
-        AnimatedBackground(kind: kind, isDay: bundle.current.isDay),
-        // 上层：可滚动内容，下拉刷新
-        SafeArea(
-          child: RefreshIndicator(
-            onRefresh: () async => ref.invalidate(weatherProvider),
-            backgroundColor: theme.cardBackground,
-            color: theme.foreground,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 底层：渐变 + 天气动效
+          AnimatedBackground(kind: kind, isDay: bundle.current.isDay),
+          // 顶部再压一层轻度遮罩，让上半屏文字更易读
+          const IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.center,
+                  colors: [Color(0x40000000), Color(0x00000000)],
+                ),
+              ),
+            ),
+          ),
+          // 上层：可滚动内容
+          SafeArea(
             child: CustomScrollView(
+              // iOS 风格的回弹滚动
               physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
               slivers: [
+                // 自定义下拉刷新
+                PullRefresh(onRefresh: () async => ref.invalidate(weatherProvider)),
                 SliverToBoxAdapter(
                   child: _TopBar(
                     theme: theme,
                     onSearch: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const SearchScreen()),
+                      PageRouteBuilder(
+                        opaque: true,
+                        transitionDuration: const Duration(milliseconds: 240),
+                        pageBuilder: (_, a, __) => FadeTransition(opacity: a, child: const SearchScreen()),
+                      ),
                     ),
                     onGps: () async {
-                      // 点定位图标：拿一次 GPS 并刷新
                       try {
                         await ref.read(targetLocationProvider.notifier).useGps();
                       } catch (e) {
                         if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('定位失败：$e')));
+                        Toast.show(context, '定位失败：$e');
                       }
                     },
                   ),
                 ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.only(top: 20, bottom: 24),
+                    padding: const EdgeInsets.only(top: 28, bottom: 28),
                     child: CurrentWeatherCard(cityName: bundle.cityName, current: bundle.current, theme: theme),
                   ),
                 ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 40),
                   sliver: SliverList.list(
                     children: [
                       HourlyForecast(hourly: bundle.hourly, theme: theme),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       DailyForecast(daily: bundle.daily, theme: theme),
                       if (bundle.airQuality != null) ...[
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         AqiCard(air: bundle.airQuality!, theme: theme),
                       ],
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       DetailGrid(current: bundle.current, theme: theme),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       if (bundle.daily.isNotEmpty) SunArc(today: bundle.daily.first, theme: theme),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       LifeIndex(current: bundle.current, theme: theme),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
                       _Footer(theme: theme, fetchedAt: bundle.fetchedAt),
                     ],
                   ),
@@ -189,13 +211,13 @@ class _Loaded extends ConsumerWidget {
               ],
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-// 顶栏：定位图标 + 搜索按钮
+// 顶栏：两个毛玻璃圆按钮 + 中间小品牌点（装饰）
 class _TopBar extends StatelessWidget {
   final WeatherTheme theme;
   final VoidCallback onSearch;
@@ -205,17 +227,20 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
       child: Row(
         children: [
-          IconButton(
-            icon: Icon(Icons.my_location_rounded, color: theme.foreground),
-            onPressed: onGps,
+          PillButton(
+            onTap: onGps,
+            child: Icon(Icons.my_location_rounded, color: theme.foreground, size: 20),
           ),
           const Spacer(),
-          IconButton(
-            icon: Icon(Icons.search_rounded, color: theme.foreground),
-            onPressed: onSearch,
+          // 中间三个小圆点，纯装饰，看着像小米顶栏那种层级感
+          _PageIndicator(theme: theme),
+          const Spacer(),
+          PillButton(
+            onTap: onSearch,
+            child: Icon(Icons.search_rounded, color: theme.foreground, size: 20),
           ),
         ],
       ),
@@ -223,7 +248,33 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-// 数据来源声明 + 拉取时间
+// 顶部装饰：三个小圆点
+class _PageIndicator extends StatelessWidget {
+  final WeatherTheme theme;
+  const _PageIndicator({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _dot(1),
+        const SizedBox(width: 6),
+        _dot(0.4),
+        const SizedBox(width: 6),
+        _dot(0.4),
+      ],
+    );
+  }
+
+  Widget _dot(double alpha) => Container(
+    width: 6,
+    height: 6,
+    decoration: BoxDecoration(color: theme.foreground.withValues(alpha: alpha * 0.85), shape: BoxShape.circle),
+  );
+}
+
+// 数据来源 + 拉取时间
 class _Footer extends StatelessWidget {
   final WeatherTheme theme;
   final DateTime fetchedAt;
@@ -236,11 +287,12 @@ class _Footer extends StatelessWidget {
         children: [
           Text(
             '数据由 Open-Meteo 提供',
-            style: TextStyle(color: theme.subtleForeground, fontSize: 11),
+            style: TextStyle(color: theme.subtleForeground, fontSize: 11, letterSpacing: 0.2),
           ),
+          const SizedBox(height: 2),
           Text(
             '更新于 ${fetchedAt.hour.toString().padLeft(2, '0')}:${fetchedAt.minute.toString().padLeft(2, '0')}',
-            style: TextStyle(color: theme.subtleForeground, fontSize: 11),
+            style: TextStyle(color: theme.subtleForeground, fontSize: 11, letterSpacing: 0.2),
           ),
         ],
       ),
