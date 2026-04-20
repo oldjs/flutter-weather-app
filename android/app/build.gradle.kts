@@ -24,7 +24,8 @@ android {
         applicationId = "com.oldjs.weather_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // 锁定 minSdk=21，geolocator 要求至少 21
+        minSdk = 21
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
