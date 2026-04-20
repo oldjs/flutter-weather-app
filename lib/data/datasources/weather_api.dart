@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:lpinyin/lpinyin.dart';
 
 // Open-Meteo 封装，返回原始 JSON map，让 repository 去解析
 class WeatherApi {
@@ -23,15 +24,12 @@ class WeatherApi {
       queryParameters: {
         'latitude': latitude,
         'longitude': longitude,
-        // 当前观测
         'current':
             'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,'
             'weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,'
             'uv_index,is_day',
-        // 未来 48 小时
         'hourly': 'temperature_2m,precipitation_probability,weather_code,wind_speed_10m',
         'forecast_hours': 48,
-        // 未来 7 天
         'daily': 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum',
         'forecast_days': 7,
         'timezone': 'auto',
@@ -40,7 +38,6 @@ class WeatherApi {
     return resp.data as Map<String, dynamic>;
   }
 
-  // 空气质量单独一个接口
   Future<Map<String, dynamic>?> fetchAirQuality({required double latitude, required double longitude}) async {
     try {
       final resp = await _dio.get(
@@ -54,40 +51,105 @@ class WeatherApi {
       );
       return resp.data as Map<String, dynamic>;
     } catch (_) {
-      // 空气质量拉不到不影响主流程，吞掉
       return null;
     }
   }
 
-  // 城市搜索：
-  // - 输入含中文：language=zh，多拿一些结果，然后过滤出 country_code='CN'
-  //   这样"上海""杭州"直接命中中国城市，不会混进海外同名地点
-  // - 纯英文输入：全球搜索，language=en
+  // 城市搜索
+  //
+  // 踩过的坑：Open-Meteo 的 geocoding name 参数只匹配 GeoNames 里的"主名称"。
+  // 中国很多大城市主名称是拼音（南京 → "Nanjing"、杭州 → "Hangzhou"、成都 → "Chengdu"），
+  // 用汉字搜不到；而另一些（济南、上海、广州）主名称就是汉字，能直接搜到。
+  // 而且返回列表并不按 population 排序，结果里经常先冒出来一堆同名的小村庄。
+  //
+  // 策略：
+  //   1) 中文输入并行打两发请求：原汉字 + 整串拼音（无分隔），两路结果都收
+  //   2) 按 id 去重合并
+  //   3) 优先中国结果（country_code='CN'），都不是中国才降级到全部
+  //   4) 按 (feature_code 行政级别 ASC, population DESC) 排序，让真正的大城市浮到顶
+  //      这样"杭州"→"Hangzhou" 拿到的 PPLA 9.2M 会把 PPL 的"四川杭州村"压在底下
+  //   5) 英文输入全球单次搜索，不变
   Future<List<dynamic>> searchCity(String query) async {
     final q = query.trim();
     if (q.isEmpty) return [];
 
     final hasChinese = RegExp(r'[\u4e00-\u9fa5]').hasMatch(q);
+
+    if (!hasChinese) {
+      // 纯英文/拼音，单次全球搜索
+      return _rawSearch(q, language: 'en', count: 10);
+    }
+
+    // 中文：同时打 汉字 和 拼音 两路
+    final pinyin = PinyinHelper.getPinyinE(q, defPinyin: '', separator: '').trim();
+    final futures = <Future<List<dynamic>>>[
+      _rawSearch(q, language: 'zh', count: 20).catchError((_) => <dynamic>[]),
+    ];
+    // 拼音和原文不一样才打第二路（避免"济南" 转出来还是中文时重复请求）
+    if (pinyin.isNotEmpty && pinyin != q) {
+      futures.add(_rawSearch(pinyin, language: 'zh', count: 20).catchError((_) => <dynamic>[]));
+    }
+    final responses = await Future.wait(futures);
+
+    // 按 id 去重合并
+    final byId = <Object, Map<String, dynamic>>{};
+    for (final list in responses) {
+      for (final raw in list) {
+        final m = raw as Map<String, dynamic>;
+        final id = m['id'] as Object?;
+        if (id == null) continue;
+        byId.putIfAbsent(id, () => m);
+      }
+    }
+    final merged = byId.values.toList();
+
+    // 中国优先，没有中国结果才退回全部
+    final cn = merged.where((m) => m['country_code'] == 'CN').toList();
+    final pool = cn.isNotEmpty ? cn : merged;
+
+    // 排序：行政级别高的在前，同级别按人口降序
+    pool.sort((a, b) {
+      final ra = _featureRank(a['feature_code'] as String?);
+      final rb = _featureRank(b['feature_code'] as String?);
+      if (ra != rb) return ra.compareTo(rb);
+      final pa = (a['population'] as num?)?.toInt() ?? 0;
+      final pb = (b['population'] as num?)?.toInt() ?? 0;
+      return pb.compareTo(pa);
+    });
+
+    // 最多返回 15 条，足够选了
+    return pool.take(15).toList();
+  }
+
+  // 行政级别排名（越小越优先）
+  // GeoNames feature_code: PPLC=首都, PPLA=省会, PPLA2=地级市驻地, PPLA3=县级市驻地, PPLA4=乡镇驻地, PPL=一般聚居地
+  int _featureRank(String? fc) {
+    switch (fc) {
+      case 'PPLC':
+        return 0;
+      case 'PPLA':
+        return 1;
+      case 'PPLA2':
+        return 2;
+      case 'PPLA3':
+        return 3;
+      case 'PPLA4':
+        return 4;
+      case 'PPL':
+        return 5;
+      default:
+        return 6;
+    }
+  }
+
+  // 原始搜索，不做任何处理
+  Future<List<dynamic>> _rawSearch(String name, {required String language, required int count}) async {
+    if (name.isEmpty) return [];
     final resp = await _dio.get(
       'https://geocoding-api.open-meteo.com/v1/search',
-      queryParameters: {
-        'name': q,
-        // 中文多拿几条，方便过滤后还剩足够结果
-        'count': hasChinese ? 20 : 10,
-        'language': hasChinese ? 'zh' : 'en',
-        'format': 'json',
-      },
+      queryParameters: {'name': name, 'count': count, 'language': language, 'format': 'json'},
     );
     final data = resp.data as Map<String, dynamic>;
-    final all = (data['results'] as List?) ?? [];
-
-    if (!hasChinese) return all;
-
-    // 中文输入优先展示中国结果；完全没中国结果才回退全部（例如搜"京都""东京"）
-    final cn = all.where((e) {
-      final m = e as Map<String, dynamic>;
-      return m['country_code'] == 'CN';
-    }).toList();
-    return cn.isNotEmpty ? cn : all;
+    return (data['results'] as List?) ?? [];
   }
 }

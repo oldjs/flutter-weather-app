@@ -30,6 +30,10 @@ dependencies:
   # 状态模型（用于Riverpod AsyncValue的相等性）
   equatable: ^2.0.5
 
+  # 中文转拼音；Open-Meteo geocoding 的 name 参数只匹配主名称（汉字+拼音混合），
+  # 许多中国大城市（南京/杭州/成都等）主名称是拼音，必须用拼音才能命中
+  lpinyin: ^2.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

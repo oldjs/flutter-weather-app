@@ -26,8 +26,34 @@ class TargetLocation {
   const TargetLocation({required this.name, required this.latitude, required this.longitude});
 }
 
-// 北京做最后兜底
-const _defaultFallback = TargetLocation(name: '北京', latitude: 39.9042, longitude: 116.4074);
+// 按设备时区猜一个默认位置，作为"所有定位手段都失败"时的最后兜底
+// 这样东八区的用户默认看到北京（不会看到东京），美东的用户默认看到纽约，不会莫名其妙定位到北京
+TargetLocation _fallbackByTimezone() {
+  final offset = DateTime.now().timeZoneOffset.inHours;
+  switch (offset) {
+    case 8:
+      return const TargetLocation(name: '北京', latitude: 39.9042, longitude: 116.4074);
+    case 9:
+      return const TargetLocation(name: '东京', latitude: 35.6762, longitude: 139.6503);
+    case 5:
+    case 6:
+      return const TargetLocation(name: '新德里', latitude: 28.6139, longitude: 77.2090);
+    case 1:
+    case 2:
+      return const TargetLocation(name: 'Berlin', latitude: 52.52, longitude: 13.405);
+    case 0:
+      return const TargetLocation(name: 'London', latitude: 51.5074, longitude: -0.1278);
+    case -5:
+    case -4:
+      return const TargetLocation(name: 'New York', latitude: 40.7128, longitude: -74.0060);
+    case -8:
+    case -7:
+      return const TargetLocation(name: 'San Francisco', latitude: 37.7749, longitude: -122.4194);
+    default:
+      // 其它时区给个地球通用点的兜底：北京（大样本用户仍是东八区的中国用户）
+      return const TargetLocation(name: '北京', latitude: 39.9042, longitude: 116.4074);
+  }
+}
 
 // ---------------- 启动时的"快路径"位置解析 ----------------
 //
@@ -75,7 +101,7 @@ Future<TargetLocation> _resolveInitialFast(Ref ref) async {
   }
 
   // 5. 默认北京
-  return _defaultFallback;
+  return _fallbackByTimezone();
 }
 
 // 后台 GPS 精确化：fire-and-forget，成功就更新 targetLocation
@@ -149,7 +175,7 @@ class TargetLocationNotifier extends StateNotifier<TargetLocation?> {
         return '${e.message}，已用 IP 定位';
       }
       _manual = false;
-      state = _defaultFallback;
+      state = _fallbackByTimezone();
       return '${e.message}，已使用默认城市';
     }
   }

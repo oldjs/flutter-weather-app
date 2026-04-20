@@ -99,6 +99,54 @@ void main() {
       expect(lat, closeTo(31.23, 1.0), reason: '上海纬度约 31.23');
     }, timeout: const Timeout(Duration(seconds: 30)));
 
+    // 这三个是用户反馈里直接炸裂的 case：Open-Meteo 的 name 参数只匹配主名称，
+    // 而南京/杭州/成都主名称是拼音，纯汉字搜会返回一堆同名小村子
+    // 靠 searchCity 内部并行走拼音兜底才能拿到真正的大城市
+    test('搜"南京"：首条必须是江苏南京（pop>1M，不能是云南的南京村）', () async {
+      final results = await api.searchCity('南京');
+      expect(results, isNotEmpty, reason: '南京必须能搜到结果');
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      final admin1 = first['admin1'] as String?;
+      expect(admin1, anyOf(contains('江苏'), equalsIgnoringCase('Jiangsu')), reason: '南京首条必须在江苏，不是云南');
+      final pop = (first['population'] as num?)?.toInt() ?? 0;
+      expect(pop, greaterThan(1000000), reason: '首条必须是大城市级别（pop>1M），不能是小村子');
+      final lat = (first['latitude'] as num).toDouble();
+      expect(lat, closeTo(32.06, 0.5), reason: '南京纬度约 32.06');
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('搜"杭州"：首条必须是浙江杭州（pop>1M，不能是四川的杭州村）', () async {
+      final results = await api.searchCity('杭州');
+      expect(results, isNotEmpty);
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      final admin1 = first['admin1'] as String?;
+      expect(admin1, anyOf(contains('浙江'), equalsIgnoringCase('Zhejiang')), reason: '杭州首条必须在浙江，不是四川');
+      final pop = (first['population'] as num?)?.toInt() ?? 0;
+      expect(pop, greaterThan(1000000));
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('搜"成都"：首条必须是四川成都（pop>1M）', () async {
+      final results = await api.searchCity('成都');
+      expect(results, isNotEmpty);
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      final admin1 = first['admin1'] as String?;
+      expect(admin1, anyOf(contains('四川'), equalsIgnoringCase('Sichuan')), reason: '成都首条必须在四川');
+      final pop = (first['population'] as num?)?.toInt() ?? 0;
+      expect(pop, greaterThan(1000000));
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('搜"北京"：首条必须是首都级别', () async {
+      final results = await api.searchCity('北京');
+      expect(results, isNotEmpty);
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      expect(first['feature_code'], equals('PPLC'), reason: '北京必须是 PPLC（首都）');
+      final lat = (first['latitude'] as num).toDouble();
+      expect(lat, closeTo(39.90, 0.5));
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
     test('搜英文"London"：走全球搜索，能命中伦敦', () async {
       final results = await api.searchCity('London');
       expect(results, isNotEmpty);
