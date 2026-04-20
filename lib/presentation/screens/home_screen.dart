@@ -188,6 +188,20 @@ class _Loaded extends ConsumerWidget {
               slivers: [
                 // 自定义下拉刷新
                 PullRefresh(onRefresh: () async => ref.invalidate(weatherProvider)),
+                // 缓存数据提示条，只在降级时显示
+                if (bundle.isStale)
+                  SliverToBoxAdapter(
+                    child: _StaleBanner(
+                      theme: theme,
+                      onSearch: () => Navigator.of(context).push(
+                        PageRouteBuilder(
+                          opaque: true,
+                          transitionDuration: const Duration(milliseconds: 240),
+                          pageBuilder: (_, a, __) => FadeTransition(opacity: a, child: const SearchScreen()),
+                        ),
+                      ),
+                    ),
+                  ),
                 SliverToBoxAdapter(
                   child: _TopBar(
                     theme: theme,
@@ -299,6 +313,49 @@ class _PageIndicator extends StatelessWidget {
     height: 6,
     decoration: BoxDecoration(color: theme.foreground.withValues(alpha: alpha * 0.85), shape: BoxShape.circle),
   );
+}
+
+// 陈旧数据提示条：网络拉不到时会显示，提醒用户当前是缓存数据
+// 可点击跳搜索页手动换个城市试试
+class _StaleBanner extends StatelessWidget {
+  final WeatherTheme theme;
+  final VoidCallback onSearch;
+  const _StaleBanner({required this.theme, required this.onSearch});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+      child: GestureDetector(
+        onTap: onSearch,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFD166).withValues(alpha: 0.18),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFFFD166).withValues(alpha: 0.4), width: 0.6),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.wifi_off_rounded, size: 16, color: theme.foreground),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '网络异常，显示的是缓存数据',
+                  style: TextStyle(color: theme.foreground, fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+              ),
+              Text(
+                '搜索城市 >',
+                style: TextStyle(color: theme.foreground.withValues(alpha: 0.85), fontSize: 12, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // 数据来源 + 拉取时间

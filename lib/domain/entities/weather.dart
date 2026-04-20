@@ -111,7 +111,8 @@ class WeatherBundle extends Equatable {
   final List<HourlyWeather> hourly;
   final List<DailyWeather> daily;
   final AirQuality? airQuality; // 空气质量可能拉不到
-  final DateTime fetchedAt; // 数据拉取时间，用于缓存失效判断
+  final DateTime fetchedAt; // 数据拉取时间
+  final bool isStale; // 是否是降级用的缓存数据（网络挂时从本地读出的）
 
   const WeatherBundle({
     required this.cityName,
@@ -122,8 +123,22 @@ class WeatherBundle extends Equatable {
     required this.daily,
     required this.airQuality,
     required this.fetchedAt,
+    this.isStale = false,
   });
 
+  // 打上陈旧标记，让 UI 可以显示"缓存数据"提示
+  WeatherBundle markStale() => WeatherBundle(
+    cityName: cityName,
+    latitude: latitude,
+    longitude: longitude,
+    current: current,
+    hourly: hourly,
+    daily: daily,
+    airQuality: airQuality,
+    fetchedAt: fetchedAt,
+    isStale: true,
+  );
+
   @override
-  List<Object?> get props => [cityName, latitude, longitude, current, hourly, daily, airQuality, fetchedAt];
+  List<Object?> get props => [cityName, latitude, longitude, current, hourly, daily, airQuality, fetchedAt, isStale];
 }
