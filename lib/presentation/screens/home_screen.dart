@@ -33,7 +33,21 @@ class HomeScreen extends ConsumerWidget {
       child: weatherAsync.when(
         data: (w) => _Loaded(bundle: w),
         loading: () => const _Loading(),
-        error: (e, _) => _ErrorView(error: e, onRetry: () => ref.invalidate(weatherProvider)),
+        error: (e, _) => _ErrorView(
+          error: e,
+          onRetry: () {
+            // 重试要把定位和天气都重新跑一遍，否则还是停在旧错误上
+            ref.invalidate(initialLocationProvider);
+            ref.invalidate(weatherProvider);
+          },
+          onSearch: () => Navigator.of(context).push(
+            PageRouteBuilder(
+              opaque: true,
+              transitionDuration: const Duration(milliseconds: 240),
+              pageBuilder: (_, a, __) => FadeTransition(opacity: a, child: const SearchScreen()),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -71,10 +85,12 @@ class _Loading extends StatelessWidget {
 }
 
 // 错误提示：无 Scaffold，居中图标+文字+自定义按钮
+// 提供"重试"和"搜索城市"两个出口，不让用户卡死
 class _ErrorView extends StatelessWidget {
   final Object error;
   final VoidCallback onRetry;
-  const _ErrorView({required this.error, required this.onRetry});
+  final VoidCallback onSearch;
+  const _ErrorView({required this.error, required this.onRetry, required this.onSearch});
 
   @override
   Widget build(BuildContext context) {
@@ -106,7 +122,19 @@ class _ErrorView extends StatelessWidget {
                   style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
                 ),
                 const SizedBox(height: 28),
-                FlatPillButton(label: '重试', onTap: onRetry),
+                // 两个按钮并排：主操作重试，次操作手动搜城市
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FlatPillButton(label: '重试', onTap: onRetry),
+                    const SizedBox(width: 12),
+                    FlatPillButton(
+                      label: '搜索城市',
+                      onTap: onSearch,
+                      background: const Color(0x1AFFFFFF),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -171,11 +199,10 @@ class _Loaded extends ConsumerWidget {
                       ),
                     ),
                     onGps: () async {
-                      try {
-                        await ref.read(targetLocationProvider.notifier).useGps();
-                      } catch (e) {
-                        if (!context.mounted) return;
-                        Toast.show(context, '定位失败：$e');
+                      // 新 useGps 不抛异常，返回 null 表示成功，否则就是降级说明
+                      final msg = await ref.read(targetLocationProvider.notifier).useGps();
+                      if (msg != null && context.mounted) {
+                        Toast.show(context, msg);
                       }
                     },
                   ),
