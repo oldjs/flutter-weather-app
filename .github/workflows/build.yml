@@ -1,4 +1,4 @@
-name: Android Build
+name: CI
 
 on:
   push:
@@ -7,8 +7,48 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 测试 job：跑真实 API 集成测试，失败直接中止流水线，不构建 APK
+  test:
+    name: Test (real-API integration)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Analyze (non-blocking, warnings only)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        continue-on-error: true
+
+      # 所有测试一把跑：
+      # - test/widget_test.dart 冷启动烟雾测试
+      # - test/integration/weather_api_test.dart 真实打 Open-Meteo forecast/air/geocoding
+      # - test/integration/ip_location_test.dart 真实打 ipapi.co
+      # 网络抖动允许一次重试，再失败就真的失败（不遮蔽真实问题）
+      - name: Run all tests (unit + real API integration)
+        run: |
+          set -e
+          flutter test --reporter expanded || (
+            echo "::warning::first test attempt failed, retrying after 10s for possible network flake"
+            sleep 10
+            flutter test --reporter expanded
+          )
+
+  # 构建 job：必须等 test 通过才跑
   build-android:
     name: Build Android APK
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,10 +71,6 @@ jobs:
 
       - name: Get packages
         run: flutter pub get
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
-        continue-on-error: true
 
       - name: Build split-per-abi APKs (release, debug-signed)
         run: flutter build apk --release --split-per-abi
