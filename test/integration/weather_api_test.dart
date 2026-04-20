@@ -137,6 +137,52 @@ void main() {
       expect(pop, greaterThan(1000000));
     }, timeout: const Timeout(Duration(seconds: 30)));
 
+    // 省份名是最经典的翻车点：Open-Meteo 的 name 参数只认 place name、不认 admin1
+    // 搜"山东"光 zh 会拿到一堆辽宁/浙江/江苏的同名小村，必须靠"省名→主要城市"别名表
+    // 把济南/青岛挤上来
+    test('搜"山东"：首条 admin1 必须是山东（不是辽宁/浙江/江苏的同名村）', () async {
+      final results = await api.searchCity('山东');
+      expect(results, isNotEmpty, reason: '山东必须能搜到结果');
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      final admin1 = first['admin1'] as String?;
+      expect(
+        admin1,
+        anyOf(contains('山东'), equalsIgnoringCase('Shandong')),
+        reason: '首条山东 admin1 必须就是山东省，不能是辽宁/浙江/江苏的同名小村',
+      );
+      // 明确否定
+      expect(admin1?.contains('辽宁'), isNot(isTrue), reason: '山东首条绝不能出辽宁');
+      expect(admin1?.contains('浙江'), isNot(isTrue), reason: '山东首条绝不能出浙江');
+      expect(admin1?.contains('江苏'), isNot(isTrue), reason: '山东首条绝不能出江苏');
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('搜"河北"：首条 admin1 必须是河北，不是辽宁/江西的同名村', () async {
+      final results = await api.searchCity('河北');
+      expect(results, isNotEmpty);
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      final admin1 = first['admin1'] as String?;
+      expect(
+        admin1,
+        anyOf(contains('河北'), equalsIgnoringCase('Hebei')),
+        reason: '首条河北 admin1 必须是河北省',
+      );
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('搜"广东"：首条 admin1 必须是广东，不是重庆的同名小村', () async {
+      final results = await api.searchCity('广东');
+      expect(results, isNotEmpty);
+      final first = results.first as Map<String, dynamic>;
+      expect(first['country_code'], equals('CN'));
+      final admin1 = first['admin1'] as String?;
+      expect(
+        admin1,
+        anyOf(contains('广东'), equalsIgnoringCase('Guangdong')),
+        reason: '首条广东 admin1 必须是广东省',
+      );
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
     test('搜"北京"：首条必须是首都级别', () async {
       final results = await api.searchCity('北京');
       expect(results, isNotEmpty);

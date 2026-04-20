@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils/geo_sanity.dart';
 import '../../data/datasources/cache_service.dart';
 import '../../data/datasources/ip_location_service.dart';
 import '../../data/datasources/location_service.dart';
@@ -27,14 +28,14 @@ class TargetLocation {
 }
 
 // 按设备时区猜一个默认位置，作为"所有定位手段都失败"时的最后兜底
-// 这样东八区的用户默认看到北京（不会看到东京），美东的用户默认看到纽约，不会莫名其妙定位到北京
+// 这 app 主要给中国用户用，所以 UTC+8/9 都兜底北京，不再给 UTC+9 兜东京
+// （日本用户能从 IP 拿到正确坐标；fallback 只在 IP 也挂的极端情况才出现）
 TargetLocation _fallbackByTimezone() {
   final offset = DateTime.now().timeZoneOffset.inHours;
   switch (offset) {
     case 8:
-      return const TargetLocation(name: '北京', latitude: 39.9042, longitude: 116.4074);
     case 9:
-      return const TargetLocation(name: '东京', latitude: 35.6762, longitude: 139.6503);
+      return const TargetLocation(name: '北京', latitude: 39.9042, longitude: 116.4074);
     case 5:
     case 6:
       return const TargetLocation(name: '新德里', latitude: 28.6139, longitude: 77.2090);
@@ -50,7 +51,7 @@ TargetLocation _fallbackByTimezone() {
     case -7:
       return const TargetLocation(name: 'San Francisco', latitude: 37.7749, longitude: -122.4194);
     default:
-      // 其它时区给个地球通用点的兜底：北京（大样本用户仍是东八区的中国用户）
+      // 其它时区给个通用兜底：北京（大样本用户仍是东八区的中国用户）
       return const TargetLocation(name: '北京', latitude: 39.9042, longitude: 116.4074);
   }
 }
@@ -71,32 +72,39 @@ Future<TargetLocation> _resolveInitialFast(Ref ref) async {
   final cache = ref.read(cacheServiceProvider);
   final locSvc = ref.read(locationServiceProvider);
 
+  // 每一层都过坐标合理性闸门：挡住旧 mock location、跨境 IP 误判、系统残留
+  // 脏数据（经典 bug：中国用户启动冷启看到东京）。不合理就继续往下走。
+
   // 1. 上次用过的城市
   final cachedCity = await cache.loadLastCity();
   if (cachedCity != null) {
-    return TargetLocation(
-      name: cachedCity['name'] as String? ?? '当前位置',
-      latitude: (cachedCity['latitude'] as num).toDouble(),
-      longitude: (cachedCity['longitude'] as num).toDouble(),
-    );
+    final lat = (cachedCity['latitude'] as num?)?.toDouble();
+    final lon = (cachedCity['longitude'] as num?)?.toDouble();
+    if (lat != null && lon != null && plausibleForDeviceTimezone(lat, lon)) {
+      return TargetLocation(
+        name: cachedCity['name'] as String? ?? '当前位置',
+        latitude: lat,
+        longitude: lon,
+      );
+    }
   }
 
   // 2. 24h 内缓存的原始位置
   final cachedPos = await cache.loadPosition();
-  if (cachedPos != null) {
+  if (cachedPos != null && plausibleForDeviceTimezone(cachedPos.latitude, cachedPos.longitude)) {
     return TargetLocation(name: '当前位置', latitude: cachedPos.latitude, longitude: cachedPos.longitude);
   }
 
   // 3. 系统 lastKnown
   final last = await locSvc.getLastKnown();
-  if (last != null) {
+  if (last != null && plausibleForDeviceTimezone(last.latitude, last.longitude)) {
     await cache.savePosition(last.latitude, last.longitude);
     return TargetLocation(name: '当前位置', latitude: last.latitude, longitude: last.longitude);
   }
 
   // 4. IP 定位 —— 粗略但秒级返回，比等 GPS 强太多
   final ip = await ref.read(ipLocationServiceProvider).locate();
-  if (ip != null) {
+  if (ip != null && plausibleForDeviceTimezone(ip.latitude, ip.longitude)) {
     return TargetLocation(name: ip.cityName, latitude: ip.latitude, longitude: ip.longitude);
   }
 
@@ -110,6 +118,10 @@ void _refreshGpsInBackground(Ref ref, {required TargetLocation current}) {
   Future.microtask(() async {
     try {
       final pos = await ref.read(locationServiceProvider).getCurrent();
+      // GPS 也能漂：mock location、车里 GPS 欺骗、硬件冷启动期间的脏坐标——
+      // 时区对不上就当没拿到
+      if (!plausibleForDeviceTimezone(pos.latitude, pos.longitude)) return;
+
       await ref.read(cacheServiceProvider).savePosition(pos.latitude, pos.longitude);
 
       // 距离差太小就不更新，省一次刷新
@@ -155,29 +167,38 @@ class TargetLocationNotifier extends StateNotifier<TargetLocation?> {
     final cache = _ref.read(cacheServiceProvider);
     try {
       final fresh = await locSvc.getCurrent();
+      // GPS 坐标跟设备时区对不上就当 GPS 不可信，走兜底链路
+      if (!plausibleForDeviceTimezone(fresh.latitude, fresh.longitude)) {
+        return _fallbackAfterGpsFail('GPS 坐标异常', locSvc, cache);
+      }
       await cache.savePosition(fresh.latitude, fresh.longitude);
       _manual = false; // 手动触发的定位仍算"自动位置"
       state = TargetLocation(name: '当前位置', latitude: fresh.latitude, longitude: fresh.longitude);
       return null;
     } on LocationException catch (e) {
-      // GPS 彻底失败再走兜底
-      final last = await locSvc.getLastKnown();
-      if (last != null) {
-        await cache.savePosition(last.latitude, last.longitude);
-        _manual = false;
-        state = TargetLocation(name: '当前位置', latitude: last.latitude, longitude: last.longitude);
-        return '${e.message}，已用上次位置';
-      }
-      final ip = await _ref.read(ipLocationServiceProvider).locate();
-      if (ip != null) {
-        _manual = false;
-        state = TargetLocation(name: ip.cityName, latitude: ip.latitude, longitude: ip.longitude);
-        return '${e.message}，已用 IP 定位';
-      }
-      _manual = false;
-      state = _fallbackByTimezone();
-      return '${e.message}，已使用默认城市';
+      return _fallbackAfterGpsFail(e.message, locSvc, cache);
     }
+  }
+
+  // GPS 失败/异常时的统一兜底：last-known → IP → timezone fallback
+  // 每一层都过坐标合理性校验
+  Future<String?> _fallbackAfterGpsFail(String reason, LocationService locSvc, CacheService cache) async {
+    final last = await locSvc.getLastKnown();
+    if (last != null && plausibleForDeviceTimezone(last.latitude, last.longitude)) {
+      await cache.savePosition(last.latitude, last.longitude);
+      _manual = false;
+      state = TargetLocation(name: '当前位置', latitude: last.latitude, longitude: last.longitude);
+      return '$reason，已用上次位置';
+    }
+    final ip = await _ref.read(ipLocationServiceProvider).locate();
+    if (ip != null && plausibleForDeviceTimezone(ip.latitude, ip.longitude)) {
+      _manual = false;
+      state = TargetLocation(name: ip.cityName, latitude: ip.latitude, longitude: ip.longitude);
+      return '$reason，已用 IP 定位';
+    }
+    _manual = false;
+    state = _fallbackByTimezone();
+    return '$reason，已使用默认城市';
   }
 }
 
