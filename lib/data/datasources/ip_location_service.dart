@@ -9,7 +9,8 @@ class IpLocation {
 }
 
 // IP 地理位置兜底：GPS 挂了就用 IP 估一个位置
-// 用 ipapi.co 免费接口，走 HTTPS，不需要 key
+// 多提供商接力：有的 API 从数据中心 IP 被封（例如 ipapi.co 对 GitHub Actions），
+// 所以按顺序试多个，任何一个成功就返回
 class IpLocationService {
   final Dio _dio;
 
@@ -18,35 +19,72 @@ class IpLocationService {
           dio ??
           Dio(
             BaseOptions(
-              connectTimeout: const Duration(seconds: 6),
-              receiveTimeout: const Duration(seconds: 8),
+              // 比默认长一点，ipapi.co 偶尔慢
+              connectTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 15),
               headers: {'Accept': 'application/json'},
             ),
           );
 
-  // 拉 IP 定位，失败返回 null，永远不抛
+  // 顺序尝试多个 IP 定位提供商，都失败才返回 null
   Future<IpLocation?> locate() async {
+    // 1. ipapi.co —— 国内用户走这个通常没问题
+    final r1 = await _tryIpapiCo();
+    if (r1 != null) return r1;
+    // 2. ipwho.is —— 数据中心 IP 也不拦，CI 里靠这个兜底
+    final r2 = await _tryIpwhoIs();
+    if (r2 != null) return r2;
+    return null;
+  }
+
+  Future<IpLocation?> _tryIpapiCo() async {
     try {
       final resp = await _dio.get<Map<String, dynamic>>('https://ipapi.co/json/');
       final data = resp.data;
       if (data == null) return null;
-      // ipapi 偶尔会返回 {"error": true} 限流响应
+      // ipapi.co 限流时返回 {"error": true, "reason": "..."}
       if (data['error'] == true) return null;
-
       final lat = data['latitude'];
       final lon = data['longitude'];
       if (lat is! num || lon is! num) return null;
+      if (lat == 0 && lon == 0) return null;
 
-      // 城市名：优先 city，没有就用 region、国家兜底
       final city = (data['city'] as String?)?.trim();
       final region = (data['region'] as String?)?.trim();
       final country = (data['country_name'] as String?)?.trim();
-      final name = [city, region, country].firstWhere((s) => s != null && s.isNotEmpty, orElse: () => null) ?? '当前位置';
-
+      final name = _firstNonEmpty([city, region, country]) ?? '当前位置';
       return IpLocation(latitude: lat.toDouble(), longitude: lon.toDouble(), cityName: name);
     } catch (_) {
-      // 网络/解析失败都吞掉，让调用方走下一个 fallback
       return null;
     }
+  }
+
+  Future<IpLocation?> _tryIpwhoIs() async {
+    try {
+      final resp = await _dio.get<Map<String, dynamic>>('https://ipwho.is/');
+      final data = resp.data;
+      if (data == null) return null;
+      // ipwho.is 出错返回 success: false
+      if (data['success'] == false) return null;
+      final lat = data['latitude'];
+      final lon = data['longitude'];
+      if (lat is! num || lon is! num) return null;
+      if (lat == 0 && lon == 0) return null;
+
+      final city = (data['city'] as String?)?.trim();
+      final region = (data['region'] as String?)?.trim();
+      final country = (data['country'] as String?)?.trim();
+      final name = _firstNonEmpty([city, region, country]) ?? '当前位置';
+      return IpLocation(latitude: lat.toDouble(), longitude: lon.toDouble(), cityName: name);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _firstNonEmpty(List<String?> xs) {
+    for (final s in xs) {
+      if (s != null && s.isNotEmpty) return s;
+    }
+    return null;
   }
 }

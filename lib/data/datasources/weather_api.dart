@@ -9,8 +9,9 @@ class WeatherApi {
           dio ??
           Dio(
             BaseOptions(
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
+              // 20s 给跨国链路（CI runner 到欧洲的 open-meteo）留点余地
+              connectTimeout: const Duration(seconds: 20),
+              receiveTimeout: const Duration(seconds: 20),
               headers: {'Accept': 'application/json'},
             ),
           );
